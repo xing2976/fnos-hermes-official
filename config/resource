@@ -1,0 +1,11 @@
+# 端口配置
+listen_port = 8642
+dashboard_port = 9119
+auto_port_detect = true
+
+# 数据目录
+data_dir = /var/apps/hermes-agent/home/data
+apphome = /vol1/@apphome/hermes-agent
+
+# 网络配置
+bind_address = 127.0.0.1
