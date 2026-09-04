@@ -1,0 +1,7 @@
+{
+  "id": "hermes-agent.Application",
+  "title": "Hermes Agent",
+  "icon": "",
+  "url": "http://localhost:9119/",
+  "type": "micro_app"
+}
