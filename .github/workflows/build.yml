@@ -29,18 +29,18 @@ jobs:
       - name: Read version
         id: version
         run: |
+          # 从配置文件读取 Hermes 上游版本标签
+          HERMES_TAG=$(grep '^HERMES_VERSION=' config/bootstrap/hermes-version.env | cut -d= -f2)
+          
+          # 从 manifest 读取 fpk 应用版本号
+          APP_VERSION=$(grep '^version' manifest | head -1 | awk '{print $3}')
+          
+          # 允许通过 workflow_dispatch 输入覆盖
           if [ -n "${{ github.event.inputs.version }}" ]; then
             HERMES_TAG="${{ github.event.inputs.version }}"
-          else
-            # 从配置文件读取
-            HERMES_TAG=$(grep '^HERMES_VERSION=' config/bootstrap/hermes-version.env | cut -d= -f2)
           fi
-          
-          # 从 app_version 输入获取 fpk 版本号，或从 manifest 读取
           if [ -n "${{ github.event.inputs.app_version }}" ]; then
             APP_VERSION="${{ github.event.inputs.app_version }}"
-          else
-            APP_VERSION=$(grep '^version' manifest | head -1 | awk '{print $3}')
           fi
           
           echo "hermes_tag=$HERMES_TAG" >> $GITHUB_OUTPUT
@@ -107,9 +107,8 @@ jobs:
           ./scripts/build-fpk.sh ${{ steps.version.outputs.app_version }}
 
       - name: Upload artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
-          name: fnos-hermes-agent.fpk
           path: dist/fnos-hermes-agent-v*.fpk
           if-no-files-found: error
           archive: false
