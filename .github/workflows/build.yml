@@ -114,7 +114,6 @@ jobs:
           archive: false
 
       - name: Create Release
-        if: ${{ !github.event.inputs.dry_run }}
         uses: softprops/action-gh-release@v1
         with:
           files: dist/fnos-hermes-agent-v*.fpk
@@ -122,24 +121,24 @@ jobs:
           name: Hermes Agent v${{ steps.version.outputs.app_version }} for fnOS
           body: |
             ## Hermes Agent for fnOS
-            
+
             **Hermes 上游版本**: ${{ steps.version.outputs.hermes_tag }}
             **fpk 版本**: ${{ steps.version.outputs.app_version }}
-            
+
             ### 功能特性
             - 内嵌自更新：自动检查 Hermes 上游版本并提示升级
             - 全中文控制面板（端口 9119）
             - 多平台消息网关（微信/飞书/Telegram 等）
             - 技能系统、MCP 扩展与持久记忆
-            
+
             ### 安装方式
             1. 下载本 Release 中的 `.fpk` 文件
             2. 在飞牛 NAS 应用中心选择「手动安装」
             3. 上传 `.fpk` 并完成安装向导
-            
+
             ### 自更新说明
             安装后应用会自动检查 Hermes 上游版本，发现更新时会提示。
             也可手动执行 `hermes agent update` 触发检查。
-            
+
             ---
             基于 [NousResearch/hermes-agent@${{ steps.version.outputs.hermes_tag }}](https://github.com/NousResearch/hermes-agent/tree/${{ steps.version.outputs.hermes_tag }})
