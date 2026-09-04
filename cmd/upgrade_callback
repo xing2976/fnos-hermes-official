@@ -1,0 +1,97 @@
+#!/bin/bash
+#
+# Hermes Agent — 升级后回调（官方版）
+# 保留数据，重装 hermes 本体
+#
+
+set -e
+
+LOG_FILE="${TRIM_PKGVAR}/info.log"
+
+log_msg() {
+    local msg="$(date '+%Y-%m-%d %H:%M:%S') - [upgrade] $1"
+    echo "$msg"
+    echo "$msg" >> "${LOG_FILE}" 2>/dev/null || true
+}
+
+toast_err() {
+    echo "$*" > "$TRIM_TEMP_LOGFILE" 2>/dev/null || true
+}
+
+trap 'toast_err "升级脚本出错(L${LINENO}): $(tail -3 "${LOG_FILE}" 2>/dev/null)"' ERR
+
+log_msg "=== upgrade_callback start ==="
+
+APP_DIR="${TRIM_APPDEST:-/var/apps/hermes-agent}"
+DATA_DIR="${TRIM_PKGHOME:-/var/apps/hermes-agent/home}/data"
+VAR_DIR="${TRIM_PKGVAR:-/vol1/@appdata/hermes-agent}"
+VENV_DIR="${VAR_DIR}/venv"
+HERMES="${VENV_DIR}/bin/hermes"
+UV_BIN="${VAR_DIR}/bin"
+HERMES_SRC="${APP_DIR}/hermes-src"
+
+# 独立数据目录保持不动
+if [ -d "${DATA_DIR}" ]; then
+    log_msg "data 目录保留: ${DATA_DIR}"
+elif [ -L "${DATA_DIR}" ]; then
+    log_msg "WARNING: data 是历史 symlink（$(readlink "${DATA_DIR}")），升级不改动"
+else
+    log_msg "WARNING: data 目录不存在，首次启动时 cmd/main 会重建空骨架"
+fi
+
+# 重新安装 hermes
+if [ -x "${UV_BIN}/uv" ] && [ -d "${HERMES_SRC}" ]; then
+    set +e
+    trap - ERR
+    
+    log_msg ">>> 升级 editable 安装 hermes-agent[all] ..."
+    
+    export UV_INDEX_URL="https://pypi.tuna.tsinghua.edu.cn/simple"
+    
+    "${UV_BIN}/uv" pip install --python "${VENV_DIR}/bin/python3" \
+        -e "${HERMES_SRC}[all]" \
+        --reinstall \
+        --index-url "https://pypi.tuna.tsinghua.edu.cn/simple" \
+        2>>"${LOG_FILE}"
+    
+    INSTALL_EXIT=$?
+    set -e
+    trap 'toast_err "升级脚本出错(L${LINENO}): $(tail -3 "${LOG_FILE}" 2>/dev/null)"' ERR
+    
+    if [ ${INSTALL_EXIT} -eq 0 ]; then
+        log_msg "升级安装成功"
+    else
+        log_msg "WARNING: 升级安装失败，尝试备用镜像..."
+        "${UV_BIN}/uv" pip install --python "${VENV_DIR}/bin/python3" \
+            -e "${HERMES_SRC}[all]" \
+            --reinstall \
+            --index-url "https://mirrors.aliyun.com/pypi/simple/" \
+            2>>"${LOG_FILE}" || true
+    fi
+fi
+
+# 更新版本记录
+if [ -x "${HERMES}" ]; then
+    NEW_VERSION=$("${HERMES}" --version 2>/dev/null | grep -oP '\d+\.\d+\.\d+' | head -1 || echo "unknown")
+    echo "$NEW_VERSION" > "${TRIM_PKGHOME}/hermes-version.txt"
+    log_msg "hermes binary OK, 新版本: ${NEW_VERSION}"
+else
+    log_msg "WARNING: hermes binary 不存在"
+fi
+
+# 权限处理
+if [ -n "${TRIM_USERNAME}" ]; then
+    chown -R "${TRIM_USERNAME}:${TRIM_USERNAME}" "${VAR_DIR}" 2>>"${LOG_FILE}" || true
+    chmod 750 "${VAR_DIR}" 2>>"${LOG_FILE}" || true
+fi
+
+# 重新检查更新状态
+log_msg "重新检查版本状态..."
+if [ -x "${APP_DIR}/cmd/self-update" ]; then
+    TRIM_APPDEST="${APP_DIR}" TRIM_PKGVAR="${TRIM_PKGVAR}" TRIM_PKGHOME="${TRIM_PKGHOME}" \
+        bash "${APP_DIR}/cmd/self-update" check >> "${LOG_FILE}" 2>&1 || true
+fi
+
+trap - ERR
+log_msg "upgrade_callback finished successfully."
+exit 0
