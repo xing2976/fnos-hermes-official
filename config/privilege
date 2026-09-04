@@ -1,0 +1,3 @@
+# 运行权限
+run-as = package
+capability = sys_admin
