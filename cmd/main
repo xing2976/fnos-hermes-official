@@ -1,0 +1,156 @@
+#!/bin/bash
+#
+# Hermes Agent — 生命周期管理（官方版）
+# start:  启动 monitor 守护（常驻，管理 gateway+dashboard 子进程）
+# stop:   停止 monitor（优雅关闭子进程）
+# status: 查询状态
+# update: 执行自更新检查
+#
+
+TRIM_APPDEST="${TRIM_APPDEST:-/var/apps/hermes-agent}"
+TRIM_PKGHOME="${TRIM_PKGHOME:-/var/apps/hermes-agent/home}"
+TRIM_PKGVAR="${TRIM_PKGVAR:-/vol1/@appdata/hermes-agent}"
+
+LOG_FILE="${TRIM_PKGVAR}/info.log"
+PID_FILE="${TRIM_PKGVAR}/monitor.pid"
+DATA_DIR="${TRIM_PKGHOME}/data"
+VENV_BIN="${TRIM_PKGVAR}/venv/bin"
+MONITOR_SCRIPT="${TRIM_APPDEST}/server/monitor.py"
+SELF_UPDATE_SCRIPT="${TRIM_APPDEST}/cmd/self-update"
+
+log_msg() { echo "$(date '+%Y-%m-%d %H:%M:%S') - $1" >> "${LOG_FILE}"; }
+
+# 确保数据目录存在
+ensure_data_dir() {
+    if [ -L "${DATA_DIR}" ]; then
+        rm -f "${DATA_DIR}" 2>/dev/null || true
+        log_msg "拆除历史 symlink: ${DATA_DIR}"
+    fi
+    if [ ! -d "${DATA_DIR}" ]; then
+        mkdir -p "${DATA_DIR}"
+        mkdir -p "${DATA_DIR}"/{sessions,skills,workspace,logs,memories,hooks,bin,cron/output}
+        log_msg "重建数据目录空骨架: ${DATA_DIR}"
+    fi
+}
+
+status() {
+    if [ -f "${PID_FILE}" ]; then
+        pid=$(head -n 1 "${PID_FILE}" | tr -d '[:space:]')
+        if [ -n "${pid}" ] && kill -0 "${pid}" 2>/dev/null; then
+            return 0
+        fi
+    fi
+    return 3
+}
+
+start_process() {
+    if status; then
+        log_msg "monitor 已在运行"
+        return 0
+    fi
+
+    ensure_data_dir
+
+    if [ ! -x "${VENV_BIN}/hermes" ]; then
+        log_msg "ERROR: hermes 未安装（${VENV_BIN}/hermes 不存在），请重装应用"
+        return 1
+    fi
+
+    mkdir -p "${TRIM_PKGVAR}/logs"
+    if [ ! -x "${MONITOR_SCRIPT}" ]; then
+        log_msg "ERROR: monitor 脚本不存在: ${MONITOR_SCRIPT}"
+        return 1
+    fi
+
+    # 以应用用户启动 monitor
+    if [ -n "${TRIM_USERNAME:-}" ] && [ "$(id -un)" != "${TRIM_USERNAME}" ]; then
+        log_msg "以 ${TRIM_USERNAME} 启动 monitor"
+        su -s /bin/bash "${TRIM_USERNAME}" -c \
+            "nohup ${VENV_BIN}/python3 ${MONITOR_SCRIPT} >> ${TRIM_PKGVAR}/logs/monitor.log 2>&1 & echo \$!" > "${PID_FILE}" 2>/dev/null
+    else
+        nohup "${VENV_BIN}/python3" "${MONITOR_SCRIPT}" >> "${TRIM_PKGVAR}/logs/monitor.log" 2>&1 &
+        printf "%s" "$!" > "${PID_FILE}"
+    fi
+
+    sleep 2
+    if status; then
+        log_msg "monitor started, pid=$(head -n 1 "${PID_FILE}")"
+        return 0
+    fi
+    log_msg "WARNING: monitor 启动失败，查看 ${TRIM_PKGVAR}/logs/monitor.log"
+    return 1
+}
+
+stop_process() {
+    log_msg "Stopping monitor ..."
+    if [ -f "${PID_FILE}" ]; then
+        pid=$(head -n 1 "${PID_FILE}" | tr -d '[:space:]')
+        if [ -n "${pid}" ] && kill -0 "${pid}" 2>/dev/null; then
+            kill -TERM "${pid}" 2>/dev/null
+            for i in $(seq 1 10); do
+                sleep 1
+                kill -0 "${pid}" 2>/dev/null || break
+            done
+            kill -KILL "${pid}" 2>/dev/null || true
+        fi
+    fi
+    pkill -TERM -f "${TRIM_PKGVAR}/venv/bin/hermes.*gateway run" 2>/dev/null || true
+    pkill -TERM -f "${TRIM_PKGVAR}/venv/bin/hermes.*dashboard" 2>/dev/null || true
+    sleep 1
+    pkill -KILL -f "${TRIM_PKGVAR}/venv/bin/hermes.*gateway run" 2>/dev/null || true
+    pkill -KILL -f "${TRIM_PKGVAR}/venv/bin/hermes.*dashboard" 2>/dev/null || true
+    rm -f "${PID_FILE}" 2>/dev/null || true
+    log_msg "monitor stopped"
+}
+
+check_update() {
+    if [ -x "${SELF_UPDATE_SCRIPT}" ]; then
+        bash "${SELF_UPDATE_SCRIPT}" check
+    else
+        log_msg "self-update script not found"
+        echo "错误：自更新脚本不存在"
+        return 1
+    fi
+}
+
+update() {
+    if [ -x "${SELF_UPDATE_SCRIPT}" ]; then
+        bash "${SELF_UPDATE_SCRIPT}" update
+    else
+        log_msg "self-update script not found"
+        echo "错误：自更新脚本不存在"
+        return 1
+    fi
+}
+
+case "${1:-start}" in
+    start)
+        start_process
+        ;;
+    stop)
+        stop_process
+        ;;
+    restart)
+        stop_process
+        sleep 1
+        start_process
+        ;;
+    status)
+        if status; then
+            echo "running"
+        else
+            echo "stopped"
+            exit 3
+        fi
+        ;;
+    check)
+        check_update
+        ;;
+    update)
+        update
+        ;;
+    *)
+        echo "用法: main {start|stop|restart|status|check|update}"
+        exit 1
+        ;;
+esac
