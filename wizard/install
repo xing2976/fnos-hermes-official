@@ -1,0 +1,41 @@
+[
+    {
+        "stepTitle": "安装说明",
+        "items": [
+            {
+                "type": "tips",
+                "helpText": "<b>Hermes Agent（官方版 v0.22.0）</b><br>由 Nous Research 官方维护的 fnOS fpk 包，支持内嵌自更新。<br><br>基于 Hermes Agent v0.21.0 源码打包，持续跟随上游发布节奏。"
+            },
+            {
+                "type": "tips",
+                "helpText": "<br><b>内嵌自更新：</b><br>应用启动后会自动检查 Hermes 上游最新版本，发现更新时会提示您。<br>也可以手动执行：<code>hermes agent update</code>"
+            },
+            {
+                "type": "tips",
+                "helpText": "<br><b>独立数据目录：</b><br>安装将为本应用创建<b>全新独立数据目录</b>，不会连接或改动任何已有 Hermes 实例的数据。"
+            },
+            {
+                "type": "tips",
+                "helpText": "<br><b>旧数据迁移：</b><br>如需沿用旧系统的会话/记忆/技能/通道配置，安装完成后请自行从旧 Hermes 备份导入 config.yaml、.env、skills、sessions 等文件到数据目录。"
+            },
+            {
+                "type": "tips",
+                "helpText": "<br>安装完成后打开控制面板（端口 9119），即可开始使用。"
+            }
+        ]
+    },
+    {
+        "stepTitle": "卸载选项",
+        "items": [
+            {
+                "type": "tips",
+                "helpText": "卸载时可以选择是否删除应用数据目录。<br><br><b>保留数据：</b>重新安装后可继续使用之前的会话和配置。<br><b>删除数据：</b>彻底清理，释放存储空间。"
+            },
+            {
+                "type": "checkbox",
+                "field": "wizard_delete_data",
+                "label": "删除应用数据目录"
+            }
+        ]
+    }
+]
