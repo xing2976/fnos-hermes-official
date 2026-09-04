@@ -1,0 +1,168 @@
+#!/bin/bash
+#
+# Hermes Agent — 安装后回调（官方版）
+# 初始化自更新配置 + 标准安装流程
+#
+
+set -e
+
+LOG_FILE="${TRIM_PKGVAR}/info.log"
+
+log_msg() {
+    local msg="$(date '+%Y-%m-%d %H:%M:%S') - [install] $1"
+    echo "$msg"
+    echo "$msg" >> "${LOG_FILE}" 2>/dev/null || true
+}
+
+toast_err() {
+    echo "$*" > "$TRIM_TEMP_LOGFILE" 2>/dev/null || true
+}
+
+trap 'toast_err "脚本出错(L${LINENO}): $(tail -3 "${LOG_FILE}" 2>/dev/null)"' ERR
+
+# -------------------------------------------
+# 清理与准备
+# -------------------------------------------
+log_msg "=== install_callback start ==="
+
+# 创建独立数据目录
+mkdir -p "${TRIM_PKGVAR}/venv"
+mkdir -p "${TRIM_PKGVAR}/logs"
+mkdir -p "${TRIM_PKGVAR}/tmp"
+mkdir -p "${TRIM_PKGHOME}/data"
+mkdir -p "${TRIM_PKGHOME}/bootstrap"
+
+# 复制 bootstrap 配置文件
+if [ -d "${TRIM_APPDEST}/config/bootstrap" ]; then
+    cp -r "${TRIM_APPDEST}/config/bootstrap/"* "${TRIM_PKGHOME}/bootstrap/" 2>/dev/null || true
+fi
+
+# -------------------------------------------
+# 初始化自更新状态
+# -------------------------------------------
+log_msg "初始化自更新配置..."
+
+cat > "${TRIM_PKGVAR}/self-update-state.json" << 'EOF'
+{
+    "last_check": "",
+    "latest_version": "",
+    "local_version": "unknown",
+    "has_update": false,
+    "enabled": true,
+    "created_at": ""
+}
+EOF
+
+# 写入创建时间
+CURRENT_TIME=$(date -Iseconds 2>/dev/null || date '+%Y-%m-%dT%H:%M:%S%z')
+if command -v python3 >/dev/null 2>&1; then
+    CURRENT_TIME=$(python3 -c "import datetime; print(datetime.datetime.now().isoformat())" 2>/dev/null || echo "$CURRENT_TIME")
+fi
+sed -i "s/\"created_at\": \"\"/\"created_at\": \"${CURRENT_TIME}\"/" "${TRIM_PKGVAR}/self-update-state.json" 2>/dev/null || true
+
+# 创建版本文件
+HERMES_VERSION=$(grep '^HERMES_VERSION=' "${TRIM_PKGHOME}/bootstrap/hermes-version.env" 2>/dev/null | cut -d= -f2 || echo "0.21.0")
+echo "$HERMES_VERSION" > "${TRIM_PKGHOME}/hermes-version.txt"
+
+log_msg "自更新配置完成，初始版本: ${HERMES_VERSION}"
+
+# -------------------------------------------
+# 标准安装流程（editable 安装）
+# -------------------------------------------
+APP_DIR="${TRIM_APPDEST:-/var/apps/hermes-agent}"
+DATA_DIR="${TRIM_PKGHOME}/data"
+VAR_DIR="${TRIM_PKGVAR}"
+VENV_DIR="${VAR_DIR}/venv"
+UV_BIN="${VAR_DIR}/bin"
+HERMES_SRC="${APP_DIR}/hermes-src"
+
+log_msg "=== 开始安装 Hermes Agent ==="
+log_msg "APP_DIR=${APP_DIR}"
+log_msg "DATA_DIR=${DATA_DIR}"
+log_msg "VENV_DIR=${VENV_DIR}"
+log_msg "HERMES_SRC=${HERMES_SRC}"
+
+# 确保 uv 可用
+if [ ! -x "${UV_BIN}/uv" ]; then
+    log_msg "下载 uv 包管理器..."
+    if command -v curl >/dev/null 2>&1; then
+        curl -LsSf https://astral.sh/uv/install.sh | sh -s -- -y --bin-dir "${UV_BIN}" 2>>"${LOG_FILE}" || true
+    fi
+fi
+
+if [ ! -x "${UV_BIN}/uv" ]; then
+    log_msg "ERROR: uv 安装失败"
+    toast_err "uv 安装失败"
+    exit 1
+fi
+
+# 创建 Python 虚拟环境
+if [ ! -d "${VENV_DIR}" ]; then
+    log_msg "创建 Python 虚拟环境..."
+    "${UV_BIN}/uv" venv "${VENV_DIR}" --python 3.11 2>>"${LOG_FILE}" || \
+    "${UV_BIN}/uv" venv "${VENV_DIR}" --python 3.12 2>>"${LOG_FILE}" || \
+    "${UV_BIN}/uv" venv "${VENV_DIR}" 2>>"${LOG_FILE}"
+fi
+
+# 从 app.tgz 解压 hermes 源码
+if [ ! -d "${HERMES_SRC}" ]; then
+    log_msg "解压 Hermes Agent 源码..."
+    tar xzf "${APP_DIR}/../app.tgz" -C "${APP_DIR}" 2>/dev/null || true
+fi
+
+# editable 安装 hermes-agent[all]
+if [ -d "${HERMES_SRC}" ]; then
+    log_msg ">>> 安装 hermes-agent[all] (editable)..."
+    
+    # 设置 pip 镜像源（优先国内）
+    export UV_INDEX_URL="https://pypi.tuna.tsinghua.edu.cn/simple"
+    export PIP_INDEX_URL="https://pypi.tuna.tsinghua.edu.cn/simple"
+    
+    set +e
+    trap - ERR
+    
+    "${UV_BIN}/uv" pip install --python "${VENV_DIR}/bin/python3" \
+        -e "${HERMES_SRC}[all]" \
+        --index-url "https://pypi.tuna.tsinghua.edu.cn/simple" \
+        2>>"${LOG_FILE}"
+    
+    INSTALL_EXIT=$?
+    set -e
+    trap 'toast_err "安装脚本出错(L${LINENO}): $(tail -3 "${LOG_FILE}" 2>/dev/null)"' ERR
+    
+    if [ ${INSTALL_EXIT} -ne 0 ]; then
+        log_msg "WARNING: pip 安装失败，尝试备用镜像..."
+        "${UV_BIN}/uv" pip install --python "${VENV_DIR}/bin/python3" \
+            -e "${HERMES_SRC}[all]" \
+            --index-url "https://mirrors.aliyun.com/pypi/simple/" \
+            2>>"${LOG_FILE}" || true
+    fi
+else
+    log_msg "ERROR: Hermes Agent 源码不存在于 ${HERMES_SRC}"
+    toast_err "Hermes Agent 源码不存在"
+    exit 1
+fi
+
+# 验证安装
+if [ -x "${VENV_DIR}/bin/hermes" ]; then
+    log_msg "hermes binary OK: ${VENV_DIR}/bin/hermes"
+else
+    log_msg "WARNING: hermes binary 不存在，可能需要重试安装"
+fi
+
+# 权限处理
+if [ -n "${TRIM_USERNAME}" ]; then
+    chown -R "${TRIM_USERNAME}:${TRIM_USERNAME}" "${VAR_DIR}" 2>>"${LOG_FILE}" || true
+    chmod 750 "${VAR_DIR}" 2>>"${LOG_FILE}" || true
+fi
+
+# 首次运行后自动检查更新
+log_msg "安装完成，触发首次版本检查..."
+if [ -x "${APP_DIR}/cmd/self-update" ]; then
+    TRIM_APPDEST="${APP_DIR}" TRIM_PKGVAR="${TRIM_PKGVAR}" TRIM_PKGHOME="${TRIM_PKGHOME}" \
+        bash "${APP_DIR}/cmd/self-update" check >> "${LOG_FILE}" 2>&1 || true
+fi
+
+trap - ERR
+log_msg "install_callback finished successfully."
+exit 0
