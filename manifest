@@ -1,5 +1,5 @@
 appname               = hermes-agent
-version               = 0.22.0
+version               = 0.21.0
 display_name          = Hermes Agent
 icon                  = ICON.PNG
 desc                  = Hermes Agent 官方 fpk 包，支持内嵌自更新。<br><br><strong>功能特性：</strong><br>• 内置自更新：自动检查 Hermes 上游版本并提示升级<br>• 全中文控制面板（9119）<br>• 多平台消息网关（微信/飞书/Telegram 等）<br>• 技能系统、MCP 扩展与持久记忆
