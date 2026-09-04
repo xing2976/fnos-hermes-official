@@ -6,7 +6,11 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: '版本号 (如 0.21.0)'
+        description: 'Hermes 上游版本标签 (如 v2026.8.31)'
+        required: false
+        type: string
+      app_version:
+        description: 'fpk 应用版本号 (如 0.21.0)'
         required: false
         type: string
       dry_run:
@@ -26,36 +30,53 @@ jobs:
         id: version
         run: |
           if [ -n "${{ github.event.inputs.version }}" ]; then
-            echo "version=${{ github.event.inputs.version }}" >> $GITHUB_OUTPUT
+            HERMES_TAG="${{ github.event.inputs.version }}"
           else
-            VERSION=$(grep '^HERMES_VERSION=' config/bootstrap/hermes-version.env | cut -d= -f2)
-            echo "version=$VERSION" >> $GITHUB_OUTPUT
+            # 从配置文件读取
+            HERMES_TAG=$(grep '^HERMES_VERSION=' config/bootstrap/hermes-version.env | cut -d= -f2)
           fi
+          
+          # 从 app_version 输入获取 fpk 版本号，或从 manifest 读取
+          if [ -n "${{ github.event.inputs.app_version }}" ]; then
+            APP_VERSION="${{ github.event.inputs.app_version }}"
+          else
+            APP_VERSION=$(grep '^version' manifest | head -1 | awk '{print $3}')
+          fi
+          
+          echo "hermes_tag=$HERMES_TAG" >> $GITHUB_OUTPUT
+          echo "app_version=$APP_VERSION" >> $GITHUB_OUTPUT
+          
+          echo "Hermes tag: $HERMES_TAG"
+          echo "App version: $APP_VERSION"
 
       - name: Download Hermes Agent source
         run: |
-          HERMES_VERSION=${{ steps.version.outputs.version }}
-          echo "下载 Hermes Agent v${HERMES_VERSION} 源码..."
+          HERMES_TAG=${{ steps.version.outputs.hermes_tag }}
+          echo "下载 Hermes Agent ${HERMES_TAG} 源码..."
           
-          # 方法1: 使用 git clone 指定 tag
-          if git clone --depth 1 --branch v${HERMES_VERSION} https://github.com/NousResearch/hermes-agent.git /tmp/hermes-src 2>/dev/null; then
+          # 方法1: 使用 git clone
+          if git clone --depth 1 --branch ${HERMES_TAG} https://github.com/NousResearch/hermes-agent.git /tmp/hermes-src 2>/dev/null; then
             echo "下载成功 (git clone)"
-          # 方法2: 尝试 ghproxy.com
-          elif git clone --depth 1 --branch v${HERMES_VERSION} https://ghproxy.com/https://github.com/NousResearch/hermes-agent.git /tmp/hermes-src 2>/dev/null; then
+          # 方法2: 尝试镜像
+          elif git clone --depth 1 --branch ${HERMES_TAG} https://ghproxy.com/https://github.com/NousResearch/hermes-agent.git /tmp/hermes-src 2>/dev/null; then
             echo "下载成功 (ghproxy.com)"
-          # 方法3: 尝试 gh-proxy.com
-          elif git clone --depth 1 --branch v${HERMES_VERSION} https://gh-proxy.com/https://github.com/NousResearch/hermes-agent.git /tmp/hermes-src 2>/dev/null; then
-            echo "下载成功 (gh-proxy.com)"
-          # 方法4: 使用 tarball from codeload
+          # 方法3: 使用 tarball from codeload
           else
             echo "尝试 codeload..."
-            curl -LsSf "https://codeload.github.com/NousResearch/hermes-agent/tar.gz/v${HERMES_VERSION}" -o /tmp/hermes-src.tar.gz
-            mkdir -p /tmp/hermes-src
-            tar xzf /tmp/hermes-src.tar.gz -C /tmp/hermes-src --strip-components=1
+            curl -LsSf "https://codeload.github.com/NousResearch/hermes-agent/tar.gz/${HERMES_TAG}" -o /tmp/hermes-src.tar.gz
+            if [ -f /tmp/hermes-src.tar.gz ] && [ $(stat -c%s /tmp/hermes-src.tar.gz 2>/dev/null || stat -f%z /tmp/hermes-src.tar.gz) -gt 1000 ]; then
+              mkdir -p /tmp/hermes-src
+              tar xzf /tmp/hermes-src.tar.gz -C /tmp/hermes-src --strip-components=1
+              echo "下载成功 (codeload)"
+            else
+              echo "ERROR: 无法下载 Hermes Agent 源码"
+              rm -f /tmp/hermes-src.tar.gz
+              exit 1
+            fi
           fi
           
           if [ ! -d "/tmp/hermes-src" ] || [ ! -f "/tmp/hermes-src/pyproject.toml" ]; then
-            echo "ERROR: 无法下载 Hermes Agent 源码"
+            echo "ERROR: 无法验证源码完整性"
             exit 1
           fi
           
@@ -66,12 +87,24 @@ jobs:
           # 创建 app.tgz
           tar czf app.tgz app/
           
-          echo "源码下载完成: $(ls -lh /tmp/hermes-src | head -5)"
+          echo "源码下载完成"
+          ls -lh app/
+
+      - name: Update manifest
+        run: |
+          APP_VERSION=${{ steps.version.outputs.app_version }}
+          echo "App version: $APP_VERSION"
+          
+          # 更新 manifest 中的版本号
+          sed -i "s/^version.*=.*$/version               = $APP_VERSION/" manifest
+          
+          echo "Updated manifest:"
+          grep "^version" manifest
 
       - name: Build FPK
         run: |
           chmod +x scripts/build-fpk.sh
-          ./scripts/build-fpk.sh ${{ steps.version.outputs.version }}
+          ./scripts/build-fpk.sh ${{ steps.version.outputs.app_version }}
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
@@ -84,12 +117,13 @@ jobs:
         uses: softprops/action-gh-release@v1
         with:
           files: dist/fnos-hermes-agent-v*.fpk
-          tag_name: v${{ steps.version.outputs.version }}
-          name: Hermes Agent v${{ steps.version.outputs.version }} (fnOS)
+          tag_name: fnos-${{ steps.version.outputs.app_version }}
+          name: Hermes Agent v${{ steps.version.outputs.app_version }} for fnOS
           body: |
             ## Hermes Agent for fnOS
             
-            版本: ${{ steps.version.outputs.version }}
+            **Hermes 上游版本**: ${{ steps.version.outputs.hermes_tag }}
+            **fpk 版本**: ${{ steps.version.outputs.app_version }}
             
             ### 功能特性
             - 内嵌自更新：自动检查 Hermes 上游版本并提示升级
@@ -107,4 +141,4 @@ jobs:
             也可手动执行 `hermes agent update` 触发检查。
             
             ---
-            基于 [NousResearch/hermes-agent](https://github.com/NousResearch/hermes-agent) ${{ steps.version.outputs.version }}
+            基于 [NousResearch/hermes-agent@${{ steps.version.outputs.hermes_tag }}](https://github.com/NousResearch/hermes-agent/tree/${{ steps.version.outputs.hermes_tag }})
