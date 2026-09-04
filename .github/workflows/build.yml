@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: '版本号 (如 0.22.0)'
+        description: '版本号 (如 0.21.0)'
         required: false
         type: string
       dry_run:
@@ -37,24 +37,23 @@ jobs:
           HERMES_VERSION=${{ steps.version.outputs.version }}
           echo "下载 Hermes Agent v${HERMES_VERSION} 源码..."
           
-          # 尝试多个镜像源
-          FALLBACK_URLS=(
-            "https://github.com/NousResearch/hermes-agent/releases/download/v${HERMES_VERSION}/hermes-agent-${HERMES_VERSION}.tar.gz"
-            "https://ghproxy.com/https://github.com/NousResearch/hermes-agent/releases/download/v${HERMES_VERSION}/hermes-agent-${HERMES_VERSION}.tar.gz"
-            "https://gh-proxy.com/https://github.com/NousResearch/hermes-agent/releases/download/v${HERMES_VERSION}/hermes-agent-${HERMES_VERSION}.tar.gz"
-          )
+          # 方法1: 尝试从 release assets 下载
+          if curl -LsSf "https://github.com/NousResearch/hermes-agent/releases/download/v${HERMES_VERSION}/hermes-agent-${HERMES_VERSION}.tar.gz" -o /tmp/hermes-src.tar.gz 2>/dev/null; then
+            echo "下载成功 (release assets)"
+          # 方法2: 尝试 gh proxy
+          elif curl -LsSf "https://ghproxy.com/https://github.com/NousResearch/hermes-agent/releases/download/v${HERMES_VERSION}/hermes-agent-${HERMES_VERSION}.tar.gz" -o /tmp/hermes-src.tar.gz 2>/dev/null; then
+            echo "下载成功 (ghproxy.com)"
+          # 方法3: 尝试 gh-proxy.com
+          elif curl -LsSf "https://gh-proxy.com/https://github.com/NousResearch/hermes-agent/releases/download/v${HERMES_VERSION}/hermes-agent-${HERMES_VERSION}.tar.gz" -o /tmp/hermes-src.tar.gz 2>/dev/null; then
+            echo "下载成功 (gh-proxy.com)"
+          # 方法4: 使用 git archive
+          else
+            echo "使用 git archive 下载源码..."
+            curl -LsSf "https://codeload.github.com/NousResearch/hermes-agent/tar.gz/v${HERMES_VERSION}" -o /tmp/hermes-src.tar.gz
+          fi
           
-          for url in "${FALLBACK_URLS[@]}"; do
-            echo "尝试: $url"
-            if curl -LsSf "$url" -o /tmp/hermes-src.tar.gz 2>/dev/null; then
-              echo "下载成功: $url"
-              break
-            fi
-            echo "下载失败，尝试下一个..."
-          done
-          
-          if [ ! -f /tmp/hermes-src.tar.gz ]; then
-            echo "ERROR: 所有镜像源都无法下载源码"
+          if [ ! -f /tmp/hermes-src.tar.gz ] || [ ! -s /tmp/hermes-src.tar.gz ]; then
+            echo "ERROR: 无法下载 Hermes Agent 源码"
             exit 1
           fi
           
@@ -65,7 +64,7 @@ jobs:
           # 创建 app.tgz
           tar czf app.tgz app/
           
-          echo "源码下载完成"
+          echo "源码下载完成: $(ls -lh /tmp/hermes-src.tar.gz | awk '{print $5}')"
 
       - name: Build FPK
         run: |
@@ -78,7 +77,7 @@ jobs:
           name: fnos-hermes-agent
           path: dist/fnos-hermes-agent-v*.fpk
 
-      - name: Create Release (if not dry run)
+      - name: Create Release
         if: ${{ !github.event.inputs.dry_run }}
         uses: softprops/action-gh-release@v1
         with:
@@ -107,5 +106,3 @@ jobs:
             
             ---
             基于 [NousResearch/hermes-agent](https://github.com/NousResearch/hermes-agent) ${{ steps.version.outputs.version }}
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
