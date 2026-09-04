@@ -1,0 +1,29 @@
+#!/bin/bash
+#
+# Hermes Agent — 卸载后回调（官方版）
+# 默认保留用户数据（独立数据目录不动）
+#
+
+TRIM_PKGHOME="${TRIM_PKGHOME:-/var/apps/hermes-agent/home}"
+TRIM_PKGVAR="${TRIM_PKGVAR:-/vol1/@appdata/hermes-agent}"
+DATA_DIR="${TRIM_PKGHOME}/data"
+LOG_FILE="${TRIM_PKGVAR}/info.log"
+
+log_msg() {
+    echo "$(date '+%Y-%m-%d %H:%M:%S') - [uninstall] $1" >> "${LOG_FILE}" 2>/dev/null || true
+}
+
+log_msg "=== uninstall_callback start ==="
+
+# 根据向导选项决定是否删除数据
+if [ "${wizard_delete_data}" = "true" ]; then
+    log_msg "用户选择删除数据，清理应用目录..."
+    rm -rf "${DATA_DIR}" 2>/dev/null || true
+    rm -rf "${TRIM_PKGVAR}" 2>/dev/null || true
+    log_msg "数据目录已清理"
+else
+    log_msg "保留用户数据: ${DATA_DIR}"
+fi
+
+log_msg "uninstall_callback finished."
+exit 0
