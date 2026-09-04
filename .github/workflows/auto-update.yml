@@ -1,0 +1,48 @@
+name: Auto-update Upstream Versions
+
+on:
+  schedule:
+    # 每天 UTC 02:00 检查（北京时间 10:00）
+    - cron: '0 2 * * *'
+  workflow_dispatch:
+
+jobs:
+  check-update:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Get latest Hermes version
+        id: latest
+        run: |
+          LATEST=$(curl -s https://api.github.com/repos/NousResearch/hermes-agent/releases/latest | jq -r '.tag_name')
+          echo "latest=$LATEST" >> $GITHUB_OUTPUT
+          echo "Latest version: $LATEST"
+
+      - name: Check current version
+        id: current
+        run: |
+          CURRENT=$(grep '^HERMES_VERSION=' config/bootstrap/hermes-version.env | cut -d= -f2)
+          echo "current=$CURRENT" >> $GITHUB_OUTPUT
+          echo "Current version: $CURRENT"
+
+      - name: Update version if needed
+        if: steps.latest.outputs.latest != steps.current.outputs.current
+        run: |
+          NEW_VERSION=$(echo "${{ steps.latest.outputs.latest }}" | sed 's/^v//')
+          sed -i "s/^HERMES_VERSION=.*/HERMES_VERSION=${NEW_VERSION}/" config/bootstrap/hermes-version.env
+          echo "Updated version: ${{ steps.current.outputs.current }} -> $NEW_VERSION"
+
+      - name: Create Pull Request
+        if: steps.latest.outputs.latest != steps.current.outputs.current
+        uses: peter-evans/create-pull-request@v5
+        with:
+          commit-message: "chore: bump hermes-agent to ${{ steps.latest.outputs.latest }}"
+          title: "chore: bump hermes-agent to ${{ steps.latest.outputs.latest }}"
+          body: |
+            检测到 Hermes Agent 新版本 ${{ steps.latest.outputs.latest }}，自动更新版本配置文件。
+            
+            此 PR 由自动更新工作流生成。
+          branch: auto-update/hermes-${{ steps.latest.outputs.latest }}
+          base: main
