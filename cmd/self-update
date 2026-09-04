@@ -1,0 +1,196 @@
+#!/bin/bash
+#
+# Hermes Agent — 自更新脚本（官方版）
+#
+# 用法：
+#   self-update check    # 检查是否有新版本
+#   self-update update   # 执行更新
+#   self-update status   # 查看当前版本和更新状态
+#
+
+set -e
+
+TRIM_APPDEST="${TRIM_APPDEST:-/var/apps/hermes-agent}"
+TRIM_PKGVAR="${TRIM_PKGVAR:-/vol1/@appdata/hermes-agent}"
+TRIM_PKGHOME="${TRIM_PKGHOME:-/var/apps/hermes-agent/home}"
+
+LOG_FILE="${TRIM_PKGVAR}/info.log"
+STATE_FILE="${TRIM_PKGVAR}/self-update-state.json"
+VERSION_FILE="${TRIM_PKGHOME}/hermes-version.txt"
+
+# 读取环境变量配置
+source "${TRIM_PKGHOME}/bootstrap/hermes-version.env" 2>/dev/null || true
+
+log_msg() {
+    local msg="$(date '+%Y-%m-%d %H:%M:%S') - [self-update] $1"
+    echo "$msg" >> "${LOG_FILE}" 2>/dev/null || true
+    echo "$msg"
+}
+
+# 获取远程最新版本
+get_latest_version() {
+    local api_url="https://api.github.com/repos/NousResearch/hermes-agent/releases/latest"
+    
+    # 尝试多个镜像源
+    local mirrors=(
+        "https://api.github.com"
+        "https://ghproxy.com https://api.github.com"
+        "https://gh-proxy.com https://api.github.com"
+    )
+    
+    for mirror in "${mirrors[@]}"; do
+        local base_url=$(echo "$mirror" | awk '{print $2}')
+        local proxy=$(echo "$mirror" | awk '{print $1}')
+        
+        if curl -sf --max-time 10 ${proxy:+--proxy $proxy} "${api_url}" -o /tmp/latest-release.json 2>/dev/null; then
+            local version=$(jq -r '.tag_name' /tmp/latest-release.json 2>/dev/null)
+            if [ -n "$version" ] && [ "$version" != "null" ]; then
+                echo "$version"
+                return 0
+            fi
+        fi
+    done
+    
+    log_msg "无法获取最新版本信息"
+    return 1
+}
+
+# 读取本地版本
+get_local_version() {
+    if [ -f "${VERSION_FILE}" ]; then
+        cat "${VERSION_FILE}"
+    elif [ -f "${TRIM_PKGVAR}/venv/bin/hermes" ]; then
+        "${TRIM_PKGVAR}/venv/bin/hermes" --version 2>/dev/null | grep -oP '\d+\.\d+\.\d+' | head -1
+    else
+        echo "unknown"
+    fi
+}
+
+# 保存状态
+save_state() {
+    local state="$1"
+    local last_check="$2"
+    local latest_version="$3"
+    local has_update="$4"
+    
+    cat > "${STATE_FILE}" << EOF
+{
+    "last_check": "${last_check}",
+    "latest_version": "${latest_version}",
+    "local_version": "$(get_local_version)",
+    "has_update": ${has_update},
+    "enabled": ${SELF_UPDATE_ENABLED}
+}
+EOF
+}
+
+# 检查更新
+do_check() {
+    log_msg "=== 检查更新 ==="
+    
+    local latest
+    latest=$(get_latest_version)
+    
+    if [ -z "$latest" ]; then
+        log_msg "检查失败"
+        save_state "error" "$(date -Iseconds)" "" "false"
+        return 1
+    fi
+    
+    local local_ver
+    local_ver=$(get_local_version)
+    
+    log_msg "本地版本: ${local_ver}"
+    log_msg "最新版本: ${latest}"
+    
+    # 简单版本号比较（假设格式为 v0.x.y 或 0.x.y）
+    local latest_clean=$(echo "$latest" | sed 's/^v//')
+    local local_clean=$(echo "$local_ver" | sed 's/^v//')
+    
+    local has_update="false"
+    if [ "$(printf '%s\n' "$local_clean" "$latest_clean" | sort -V | tail -n1)" = "$latest_clean" ] && [ "$local_clean" != "$latest_clean" ]; then
+        has_update="true"
+        log_msg "发现新版本！"
+    else
+        log_msg "已是最新版本"
+    fi
+    
+    save_state "ok" "$(date -Iseconds)" "$latest" "$has_update"
+    echo "$has_update"
+}
+
+# 执行更新
+do_update() {
+    log_msg "=== 开始更新 ==="
+    
+    local latest
+    latest=$(get_latest_version)
+    
+    if [ -z "$latest" ]; then
+        log_msg "无法获取最新版本，更新失败"
+        return 1
+    fi
+    
+    local local_ver
+    local_ver=$(get_local_version)
+    local latest_clean=$(echo "$latest" | sed 's/^v//')
+    local local_clean=$(echo "$local_ver" | sed 's/^v//')
+    
+    # 检查是否需要更新
+    if [ "$local_clean" = "$latest_clean" ]; then
+        log_msg "已是最新版本 ${latest}"
+        return 0
+    fi
+    
+    log_msg "准备更新：${local_ver} -> ${latest}"
+    
+    # 备份当前配置
+    log_msg "备份配置..."
+    cp -r "${TRIM_PKGVAR}/config.yaml" "${TRIM_PKGVAR}/config.yaml.bak.$(date +%Y%m%d_%H%M%S)" 2>/dev/null || true
+    cp -r "${TRIM_PKGVAR}/.env" "${TRIM_PKGVAR}/.env.bak.$(date +%Y%m%d_%H%M%S)" 2>/dev/null || true
+    
+    # 调用 fnOS 升级回调
+    log_msg "调用升级回调..."
+    if [ -x "${TRIM_APPDEST}/cmd/upgrade_callback" ]; then
+        TRIM_PKGVAR="${TRIM_PKGVAR}" TRIM_APPDEST="${TRIM_APPDEST}" TRIM_PKGHOME="${TRIM_PKGHOME}" \
+            bash "${TRIM_APPDEST}/cmd/upgrade_callback" 2>>"${LOG_FILE}"
+    fi
+    
+    # 更新版本文件
+    echo "$latest_clean" > "${VERSION_FILE}"
+    
+    log_msg "更新完成！请重启应用。"
+    echo "更新成功：${local_ver} -> ${latest}"
+}
+
+# 查看状态
+do_status() {
+    echo "=== 自更新状态 ==="
+    echo "启用状态: $([ "$SELF_UPDATE_ENABLED" = "true" ] && echo "是" || echo "否")"
+    echo "本地版本: $(get_local_version)"
+    
+    if [ -f "${STATE_FILE}" ]; a
+        echo "上次检查: $(jq -r '.last_check' "${STATE_FILE}")"
+        echo "最新版本: $(jq -r '.latest_version' "${STATE_FILE}")"
+        echo "需要更新: $(jq -r '.has_update' "${STATE_FILE}")"
+    else
+        echo "未检查过更新"
+    fi
+}
+
+# 主入口
+case "${1:-check}" in
+    check)
+        do_check
+        ;;
+    update)
+        do_update
+        ;;
+    status)
+        do_status
+        ;;
+    *)
+        echo "用法: self-update {check|update|status}"
+        exit 1
+        ;;
+esac
