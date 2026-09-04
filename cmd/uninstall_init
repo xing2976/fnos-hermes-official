@@ -1,0 +1,22 @@
+#!/bin/bash
+#
+# Hermes Agent — 卸载前回调（官方版）
+#
+
+TRIM_PKGVAR="${TRIM_PKGVAR:-/vol1/@appdata/hermes-agent}"
+LOG_FILE="${TRIM_PKGVAR}/info.log"
+
+log_msg() {
+    echo "$(date '+%Y-%m-%d %H:%M:%S') - [uninstall_init] $1" >> "${LOG_FILE}" 2>/dev/null || true
+}
+
+log_msg "=== uninstall_init start ==="
+
+# 停止所有 Hermes 进程
+pkill -9 -f "hermes.*monitor\.py" 2>/dev/null || true
+pkill -9 -f "hermes.*gateway" 2>/dev/null || true
+pkill -9 -f "hermes.*dashboard" 2>/dev/null || true
+rm -f "${TRIM_PKGVAR}/monitor.pid" 2>/dev/null || true
+
+log_msg "uninstall_init finished."
+exit 0
