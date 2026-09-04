@@ -1,0 +1,111 @@
+name: Build fnOS Hermes Agent FPK
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: '版本号 (如 0.22.0)'
+        required: false
+        type: string
+      dry_run:
+        description: '仅构建不发布'
+        required: false
+        default: false
+        type: boolean
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Read version
+        id: version
+        run: |
+          if [ -n "${{ github.event.inputs.version }}" ]; then
+            echo "version=${{ github.event.inputs.version }}" >> $GITHUB_OUTPUT
+          else
+            VERSION=$(grep '^HERMES_VERSION=' config/bootstrap/hermes-version.env | cut -d= -f2)
+            echo "version=$VERSION" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Download Hermes Agent source
+        run: |
+          HERMES_VERSION=${{ steps.version.outputs.version }}
+          echo "下载 Hermes Agent v${HERMES_VERSION} 源码..."
+          
+          # 尝试多个镜像源
+          FALLBACK_URLS=(
+            "https://github.com/NousResearch/hermes-agent/releases/download/v${HERMES_VERSION}/hermes-agent-${HERMES_VERSION}.tar.gz"
+            "https://ghproxy.com/https://github.com/NousResearch/hermes-agent/releases/download/v${HERMES_VERSION}/hermes-agent-${HERMES_VERSION}.tar.gz"
+            "https://gh-proxy.com/https://github.com/NousResearch/hermes-agent/releases/download/v${HERMES_VERSION}/hermes-agent-${HERMES_VERSION}.tar.gz"
+          )
+          
+          for url in "${FALLBACK_URLS[@]}"; do
+            echo "尝试: $url"
+            if curl -LsSf "$url" -o /tmp/hermes-src.tar.gz 2>/dev/null; then
+              echo "下载成功: $url"
+              break
+            fi
+            echo "下载失败，尝试下一个..."
+          done
+          
+          if [ ! -f /tmp/hermes-src.tar.gz ]; then
+            echo "ERROR: 所有镜像源都无法下载源码"
+            exit 1
+          fi
+          
+          # 解压到 app 目录
+          mkdir -p app
+          tar xzf /tmp/hermes-src.tar.gz -C app --strip-components=1
+          
+          # 创建 app.tgz
+          tar czf app.tgz app/
+          
+          echo "源码下载完成"
+
+      - name: Build FPK
+        run: |
+          chmod +x scripts/build-fpk.sh
+          ./scripts/build-fpk.sh ${{ steps.version.outputs.version }}
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: fnos-hermes-agent
+          path: dist/fnos-hermes-agent-v*.fpk
+
+      - name: Create Release (if not dry run)
+        if: ${{ !github.event.inputs.dry_run }}
+        uses: softprops/action-gh-release@v1
+        with:
+          files: dist/fnos-hermes-agent-v*.fpk
+          tag_name: v${{ steps.version.outputs.version }}
+          name: Hermes Agent v${{ steps.version.outputs.version }} (fnOS)
+          body: |
+            ## Hermes Agent for fnOS
+            
+            版本: ${{ steps.version.outputs.version }}
+            
+            ### 功能特性
+            - 内嵌自更新：自动检查 Hermes 上游版本并提示升级
+            - 全中文控制面板（端口 9119）
+            - 多平台消息网关（微信/飞书/Telegram 等）
+            - 技能系统、MCP 扩展与持久记忆
+            
+            ### 安装方式
+            1. 下载本 Release 中的 `.fpk` 文件
+            2. 在飞牛 NAS 应用中心选择「手动安装」
+            3. 上传 `.fpk` 并完成安装向导
+            
+            ### 自更新说明
+            安装后应用会自动检查 Hermes 上游版本，发现更新时会提示。
+            也可手动执行 `hermes agent update` 触发检查。
+            
+            ---
+            基于 [NousResearch/hermes-agent](https://github.com/NousResearch/hermes-agent) ${{ steps.version.outputs.version }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
